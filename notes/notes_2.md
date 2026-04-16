@@ -117,6 +117,14 @@ uvicorn main:app --reload
 # --reload = restart on code changes (dev only)
 ```
 
+Using uvicorn
+
+uvicorn main:app --reload --port 8000
+main:app — file main.py, variable app (required)
+--reload — restart server when code changes (dev only)
+--port 8000 — port number (8000 is default, so optional)
+That's it. The main:app part is required, everything else has defaults.
+
 ---
 
 ## 9. Starting Async Code
@@ -189,3 +197,185 @@ If 100 plain `def` requests come in at once:
 - Library supports `await` -> use `async def`
 - Library does NOT support `await` (blocking) -> use plain `def`
 - Not sure -> use plain `def` (FastAPI protects you with the threadpool)
+
+---
+
+## 12. Automatic Docs — How They Work
+
+```
+Your type hints + Pydantic models
+        ↓  FastAPI reads these at startup
+   OpenAPI JSON spec (auto-generated at /openapi.json)
+        ↓  Swagger UI reads this JSON
+   Interactive docs at /docs
+```
+
+Nobody writes the docs manually. FastAPI inspects your code — types, models, routes — and generates an OpenAPI spec.
+
+- **`/docs`** — interactive docs by **Swagger UI**
+- **`/redoc`** — alternative docs by **ReDoc** (same OpenAPI spec, different UI)
+
+### Minimal FastAPI server
+
+```python
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.get("/")
+async def root():
+    return {"message": "hello world"}
+```
+
+Run with `fastapi dev` or `uvicorn main:app --reload` — then visit `/docs` or `/redoc`.
+
+---
+
+## 13. ASGI — What It Is
+
+ASGI = **Asynchronous Server Gateway Interface**. A standard that defines how a server talks to a Python web framework.
+
+- **Server** (uvicorn) receives raw HTTP → passes to framework via ASGI protocol
+- **Framework** (FastAPI) processes it → returns response via ASGI protocol
+
+Older version: WSGI (synchronous, used by Flask). ASGI supports async.
+
+---
+
+## 14. Uvicorn Internals (Simplified)
+
+Uvicorn internally does something like:
+
+```python
+async def serve():
+    while True:
+        request = await wait_for_next_request()  # pauses until request comes
+        await app(request)                        # calls your FastAPI app
+
+asyncio.run(serve())   # starts event loop, runs forever
+```
+
+- `app` is your FastAPI instance — it's a **callable async function** (follows ASGI standard)
+- `serve()` never finishes — loops forever listening for requests
+- Ctrl+C stops it
+
+---
+
+## 15. `fastapi dev` Command
+
+```bash
+fastapi dev
+```
+
+A CLI shortcut that comes with `fastapi[standard]`. It just runs `uvicorn main:app --reload` with sensible defaults. Nothing more.
+
+With uv: `uv run fastapi dev`
+
+---
+
+## 16. Installing FastAPI
+
+```bash
+pip install "fastapi[standard]"    # recommended — includes uvicorn, pydantic, etc.
+pip install fastapi                # minimal, no extras
+```
+
+With uv: `uv add "fastapi[standard]"`
+
+---
+
+## 17. Request Flow — From HTTP to Response
+
+### Decorators and Path Operation Functions
+
+```python
+@app.get("/page")          # decorator — registers the route (runs ONCE at startup)
+async def read_page():     # path operation function — runs on each request
+    return {"msg": "hi"}
+```
+
+The decorator does NOT run per request. It runs **once at startup** to register: "`/page` + GET = `read_page`". After that, only the function runs.
+
+### Full request flow
+
+1. Client sends `GET /page` to port 8000
+2. **Uvicorn** (listening on port 8000) receives the raw HTTP request
+3. Passes it to **FastAPI `app`**
+4. FastAPI looks up its route table: `/page` + `GET` → `read_page`
+5. Runs `read_page()`
+6. Takes the return value, converts to JSON HTTP response
+7. **Uvicorn** sends response back to the client
+
+---
+
+## 18. Starlette
+
+Starlette is the **web framework FastAPI is built on**. FastAPI is literally a subclass of Starlette.
+
+```
+Uvicorn  →  Starlette  →  FastAPI  →  Your code
+(server)    (web framework)  (API framework)   (routes/logic)
+```
+
+- **Starlette** handles low-level stuff — routing, requests, responses, WebSockets, middleware
+- **FastAPI** adds on top — type validation, automatic docs, Pydantic integration
+
+When docs say "using an option from Starlette" (like `:path`), it means FastAPI inherited that feature. No need to learn Starlette separately.
+
+---
+
+## 19. Path Parameters
+
+**Source:** https://fastapi.tiangolo.com/tutorial/path-params/
+
+### Basic usage
+```python
+@app.get("/items/{item_id}")
+async def read_item(item_id: int):
+    return {"item_id": item_id}
+```
+
+- `{item_id}` in the route becomes the function argument `item_id`
+- Type hint `int` gives **data conversion** (`"3"` → `3`) and **validation** (rejects `"foo"` or floats with a 422 error)
+
+### Route order matters
+
+FastAPI checks routes **top to bottom**, stops at first match. Put specific routes before generic ones:
+
+```python
+@app.get("/users/me")         # first — specific
+async def read_user_me(): ...
+
+@app.get("/users/{user_id}")  # second — generic
+async def read_user(user_id: str): ...
+```
+
+If reversed, `/users/me` would match `{user_id}` with `user_id="me"`.
+
+### Predefined values with Enum
+
+```python
+from enum import Enum
+
+class ModelName(str, Enum):
+    alexnet = "alexnet"
+    resnet = "resnet"
+
+@app.get("/models/{model_name}")
+async def get_model(model_name: ModelName):
+    return {"model": model_name.value}
+```
+
+- Only values defined in the enum are allowed — anything else returns a **422 error** automatically
+- Enum values show up in `/docs`
+- `model_name` is the enum member, `model_name.value` is the string
+
+### Path parameters containing paths
+
+```python
+@app.get("/files/{file_path:path}")
+async def read_file(file_path: str):
+    return {"file_path": file_path}
+```
+
+`:path` tells Starlette the parameter can contain `/` slashes — so `/files/home/john/file.txt` works instead of failing.
