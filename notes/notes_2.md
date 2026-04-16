@@ -379,3 +379,4 @@ async def read_file(file_path: str):
 ```
 
 `:path` tells Starlette the parameter can contain `/` slashes — so `/files/home/john/file.txt` works instead of failing.
+:path is a Starlette path converter — not a type hint, not a Python thing. It's URL routing syntax.
